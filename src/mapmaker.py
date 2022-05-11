@@ -43,29 +43,34 @@ def loadLevel(maps, player):
 
 
 class Map:
-    def __init__(self, x,y,w,h,l=28):
-        self.x = x
-        self.y = y
-        self.w = w
-        self.h = h
+    def __init__(self, screen, x, y, w, h, l=30):
+        self.obj = pygame.Surface((w, h))
+        self.obj.fill((180, 180, 180))
+        self.rect = self.obj.get_rect(top=y, left=x)
         self.l = l
         self.blocks = []
         self.mapSpriteGroup = pygame.sprite.Group()
-        self._createBlockGrid()
+        self.screen = screen
+        self._createBlockGrid(w, h, l)
 
-    def _createBlockGrid(self):
-        for block_x in range(self.x+1, self.x + self.w, self.l+2):
-            for block_y in range(self.y+1, self.y + self.h, self.l+2):
-                self.blocks.append(MapBlock("floor", block_x, block_y, self.l))
+    def _createBlockGrid(self, w, h, l):
+        for block_x in range(0, w, l):
+            for block_y in range(0, h, l):
+                self.blocks.append(MapBlock("floor", block_x, block_y, l))
                 self.mapSpriteGroup.add(self.blocks[-1])
 
-    def draw(self, screen):
+    def draw(self):
+        # self.obj.fill((self.screen., 0, 0))
+        self.screen.blit(self.obj, self.rect)
         for sprite in self.mapSpriteGroup:
-            screen.blit(sprite.obj, sprite.rect)
+            self.obj.blits([
+                (sprite.obj, sprite.rect),
+                (sprite.fg, sprite.fgr)
+            ])
 
     def getClickedBlock(self, mouse_pos):
         for block in self.blocks:
-            if block.checkClick(mouse_pos):
+            if block.checkClick(self._getRelativeCoordinates(mouse_pos)):
                 return block
         return None
 
@@ -76,6 +81,11 @@ class Map:
                 colliding_blocks.append(block)
         return colliding_blocks
 
+    def getRelativeRect(self):
+        rr = self.rect.copy()
+        rr.left, rr.top = 0, 0
+        return rr
+
     def createSaveData(self):
         save_data = []
         for block in self.blocks:
@@ -85,6 +95,9 @@ class Map:
     def loadSaveData(self, save_data):
         for block in enumerate(self.blocks):
             block[1].loadSaveData(save_data[block[0]])
+
+    def _getRelativeCoordinates(self, pos):
+        return pos[0] - self.rect.left, pos[1] - self.rect.top
         
 
 
@@ -94,9 +107,18 @@ class Map:
 class MapBlock(pygame.sprite.Sprite):
     def __init__(self, type, pos_x, pos_y, block_l):
         super().__init__()
+        self.map = map
         self.obj = pygame.Surface((block_l, block_l))
+        self.obj.fill((180, 180, 180))
         self.rect = self.obj.get_rect(top=pos_y, left=pos_x)
+        self.fg = pygame.Surface((block_l-2, block_l-2))
+        self.fgr = self.fg.get_rect(top=pos_y+1, left=pos_x+1)
         self.type = type
+        self.typelist = {
+            "floor": ((160, 160, 160), False),
+            "wall": ((10, 10, 10), True),
+            "finish": ((90, 255, 90), False),
+        }
         self.selectSpriteByType()
         self.solid = False
 
@@ -115,18 +137,13 @@ class MapBlock(pygame.sprite.Sprite):
             return False
 
     def selectSpriteByType(self):
-        if self.type == "wall":
-            self.obj.fill((10, 10, 10))
-            self.solid = True
-        elif self.type == "floor":
-            self.obj.fill((160, 160, 160))
-            self.solid = False
+        self.fg.fill(self.typelist[self.type][0])
+        self.solid = self.typelist[self.type][1]
 
     def changeBlockType(self):
-        if self.type == "wall":
-            self.type = "floor"
-        elif self.type == "floor":
-            self.type = "wall"
+        idx = list(self.typelist.keys()).index(self.type)
+        self.type = list(self.typelist.keys())[(idx+1)%len(self.typelist)]
+        print(self.type)
         self.selectSpriteByType()
 
     def createSaveData(self):
@@ -138,15 +155,53 @@ class MapBlock(pygame.sprite.Sprite):
 
 
 
-class Player(pygame.sprite.Sprite):
-    def __init__(self, map, x, y, l, cvel=3):
+class DynamicObject(pygame.sprite.Sprite):
+    def __init__(self, map: Map, x, y, l, cvel=3):
         super().__init__()
         self.map = map
         self.obj = pygame.Surface((l, l))
-        self.obj.fill((50, 50, 250))
         self.rect = self.obj.get_rect(center=(x, y))
-        self.vel = [0, 0]
         self.cvel = cvel
+        self.vel = [0, 0]
+
+    def draw(self):
+        self.map.obj.blit(self.obj, self.rect)
+
+    
+    def createSaveData(self):
+        return (self.rect.x, self.rect.y, self.rect.width, self.cvel)
+
+
+    def loadSaveData(self, data):
+        self.rect.x = data[0]
+        self.rect.y = data[1]
+        self.rect.width = data[2]
+        self.rect.height = data[2]
+        self.cvel = data[3]
+
+    
+    def update(self):
+        self.rect.move_ip(self.vel)
+        self.rect.clamp_ip(self.map.getRelativeRect())
+        collision = self.map.getCollidingBlocks(self.rect)
+        self.collisionHandle(collision)
+
+        
+    def collisionHandle(self, colliding_objects):
+        pass
+
+
+    def getRelativePos(self, pos):
+        rr = pos[0] - self.map.rect.left, pos[1] - self.map.rect.top
+        return rr
+
+
+
+class Player(DynamicObject):
+    def __init__(self, map: Map, x, y, l, cvel=3):
+        super().__init__(map, x, y, l, cvel)
+        self.obj.fill((50, 50, 250))
+        
 
     def move(self, key):
         if key == pygame.K_UP:
@@ -175,19 +230,10 @@ class Player(pygame.sprite.Sprite):
             self.vel[0] = 0
             self.vel[1] = round(self.vel[1]/0.707)
 
-    def update(self):
-        self.rect.move_ip(self.vel)
-        if self.rect.left < self.map.x:
-            self.rect.left = self.map.x
-        elif self.rect.right > self.map.x + self.map.w:
-            self.rect.right = self.map.x + self.map.w
-        if self.rect.top < self.map.y:
-            self.rect.top = self.map.y
-        elif self.rect.bottom > self.map.y + self.map.h:
-            self.rect.bottom = self.map.y + self.map.h
-        collision = self.map.getCollidingBlocks(self.rect)
-        if collision.__len__() > 0:
-            for block in collision:
+
+    def collisionHandle(self, colliding_objects):
+        if colliding_objects.__len__() > 0:
+            for block in colliding_objects:
                 # check distance of collision
                 lOverlap = block.rect.right - self.rect.left
                 rOverlap = self.rect.right - block.rect.left
@@ -209,20 +255,96 @@ class Player(pygame.sprite.Sprite):
                     self.rect.bottom = block.rect.top
 
 
+
+class BounceObstacle(DynamicObject):
+    def __init__(self, map: Map, x, y, l, cvel=3, cdir=0):
+        super().__init__(map, x, y, l, cvel)
+        self.obj.fill((200, 50, 50))
+        self.cdir = cdir
+        self.dragdrop = False
+
+
+    def stop(self):
+        self.vel[self.cdir] = 0
+    
+
+    def play(self):
+        self.vel[self.cdir] = self.cvel
+
+
+    def collisionHandle(self, colliding_objects):
+        if colliding_objects.__len__() > 0:
+            for block in colliding_objects:
+                # check distance of collision
+                lOverlap = block.rect.right - self.rect.left
+                rOverlap = self.rect.right - block.rect.left
+                tOverlap = block.rect.bottom - self.rect.top
+                bOverlap = self.rect.bottom - block.rect.top
+
+                # sort based on distance
+                overlapSolve = [lOverlap, rOverlap, tOverlap, bOverlap]
+                u = sorted(range(len(overlapSolve)), key=lambda k: overlapSolve[k])
+                
+                # solve collision
+                if u[0] == 0:
+                    # self.rect.left = block.rect.right
+                    self.vel[0] = -self.vel[0]
+                elif u[0] == 1:
+                    # self.rect.right = block.rect.left
+                    self.vel[0] = -self.vel[0]
+                elif u[0] == 2:
+                    # self.rect.top = block.rect.bottom
+                    self.vel[1] = -self.vel[1]
+                elif u[0] == 3:
+                    # self.rect.bottom = block.rect.top
+                    self.vel[1] = -self.vel[1]
+
+
+    def onRMousePressed(self, pos):
+        rpos = self.getRelativePos(pos)
+        print(self.rect.center, rpos)
+        if self.rect.collidepoint(rpos):
+            self.dragdrop = True
+
+
+    def onRMouseReleased(self):
+        self.dragdrop = False
+
+
+    def update(self):
+        rpos = self.getRelativePos(pygame.mouse.get_pos())
+        if self.dragdrop:
+            self.rect.center = rpos
+            return
+        super().update()
+
+
+
+class Button(pygame.sprite.Sprite):
+    def __init__(self, x, y, w, h, text, func):
+        super().__init__()
+        self.obj = pygame.Surface((w, h))
+        self.obj.fill((50, 50, 50))
+        self.rect = self.obj.get_rect(top=y, left=x)
+        self.text = text
+        self.func = func
+        self.renderText()
+
+
+    def renderText(self):
+        font = pygame.font.SysFont("Arial", 20)
+        text = font.render(self.text, True, (255, 255, 255))
+        rect = text.get_rect(center=(self.rect.width/2, self.rect.height/2))
+        self.obj.blit(text, rect)
+
+
     def draw(self, screen):
         screen.blit(self.obj, self.rect)
 
-    
-    def createSaveData(self):
-        return (self.rect.x, self.rect.y, self.rect.width, self.cvel)
 
-
-    def loadSaveData(self, data):
-        self.rect.x = data[0]
-        self.rect.y = data[1]
-        self.rect.width = data[2]
-        self.rect.height = data[2]
-        self.cvel = data[3]
+    def getClick(self, pos):
+        if self.rect.collidepoint(pos):
+            self.func()
 
 
 
@@ -233,23 +355,61 @@ def main():
     FPS = 60
     CLOCK = pygame.time.Clock()
 
-    maps = Map(30, 100, 720, 450)
+    maps = Map(SCREEN, 10, 110, 780, 480)
     player = Player(maps, 30, 100, 20)
+
+    obstacles = pygame.sprite.Group()
+    def addObstacle(dir):
+        print("add obstacle")
+        obstacles.add(BounceObstacle(maps, player.rect.centerx, player.rect.centery, 20, cvel=3, cdir=dir))
+    def clearObstacle():
+        print("remove obstacle")
+        obstacles.empty()
+    def playObstacle():
+        print("play obstacle")
+        for obstacle in obstacles:
+            obstacle.play()
+    def stopObstacle():
+        print("stop obstacle")
+        for obstacle in obstacles:
+            obstacle.stop()
+
+    buttons = pygame.sprite.Group()
+    buttons.add(Button(10, 10, 150, 40, "Save Level", lambda: saveLevel(maps, player)))
+    buttons.add(Button(10, 60, 150, 40, "Load Level", lambda: loadLevel(maps, player)))
+    buttons.add(Button(180, 10, 150, 40, "Add V-Obs", lambda: addObstacle(dir=1)))
+    buttons.add(Button(180, 60, 150, 40, "Add H-Obs", lambda: addObstacle(dir=0)))
+    buttons.add(Button(350, 10, 150, 40, "Play", lambda: playObstacle()))
+    buttons.add(Button(350, 60, 150, 40, "Stop", lambda: stopObstacle()))
+    buttons.add(Button(520, 10, 150, 40, "Clear Obs", lambda: clearObstacle()))
+
+
+    # bouncy1 = BounceObstacle(maps, 100, 100, 20, cdir=1)
 
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                saveLevel(maps, player)
                 pygame.quit()
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
-                    block = maps.getClickedBlock(pygame.mouse.get_pos())
+                    mouse_pos = pygame.mouse.get_pos()
+                    block = maps.getClickedBlock(mouse_pos)
                     if block is not None:
                         block.changeBlockType()
+                    for button in buttons:
+                        button.getClick(mouse_pos)
 
                 if event.button == 3:
-                    loadLevel(maps, player)
+                    mouse_pos = pygame.mouse.get_pos()
+                    for obstacle in obstacles:
+                        obstacle.onRMousePressed(mouse_pos)
+
+            if event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 3:
+                    mouse_pos = pygame.mouse.get_pos()
+                    for obstacle in obstacles:
+                        obstacle.onRMouseReleased()
 
             if event.type == pygame.KEYDOWN:
                 player.move(event.key)
@@ -258,9 +418,15 @@ def main():
                 player.stop(event.key)
 
         SCREEN.fill((180, 180, 180))
-        maps.draw(SCREEN)
+        maps.draw()
         player.update()
-        player.draw(SCREEN)
+        player.draw()
+
+        SCREEN.blits([(b.obj, b.rect) for b in buttons])
+
+        for obstacle in obstacles:
+            obstacle.update()
+            obstacle.draw()
 
         pygame.display.update()
         CLOCK.tick(FPS)
